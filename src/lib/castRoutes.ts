@@ -7,7 +7,7 @@ interface RuntimeRoute {
   name: string
   path: string
   params?: Record<string, Parser<unknown>>
-  query?: Record<string, QueryParamConfig>
+  query?: Record<string, BoundQueryParam>
   props?: RouteRecordRaw['props']
   component: RouteRecordRaw['component']
 }
@@ -17,7 +17,21 @@ type AnyDef = AnyRouteDef | RouteGroup
 
 /** @internal */
 function toRuntime(def: AnyRouteDef): RuntimeRoute {
-  return def as unknown as RuntimeRoute
+  const resolvedQuery: Record<string, BoundQueryParam> = {}
+  if (def.query) {
+    for (const [key, config] of Object.entries(def.query)) {
+      resolvedQuery[key] = resolveQueryConfig(config)
+    }
+  }
+
+  return {
+    name: def.name,
+    path: def.path,
+    params: def.params,
+    query: resolvedQuery,
+    props: def.props,
+    component: def.component,
+  }
 }
 
 /** @internal */
@@ -48,8 +62,7 @@ function buildQueryPatch(
   if (!query) return null
   const patch: Record<string, string> = {}
 
-  for (const [key, config] of Object.entries(query)) {
-    const bound: BoundQueryParam = resolveQueryConfig(config)
+  for (const [key, bound] of Object.entries(query)) {
     const rawEntry = rawQuery[key]
     const raw = Array.isArray(rawEntry) ? rawEntry[0] : rawEntry
     const serialized = bound.patchIfNeeded(raw)

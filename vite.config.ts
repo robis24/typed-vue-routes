@@ -1,9 +1,26 @@
 import { defineConfig } from 'vitest/config'
-import vue from '@vitejs/plugin-vue'
-import typedRoutes from './vite-plugin-typed-routes'
 
 export default defineConfig({
-  plugins: [vue(), typedRoutes()],
+  build: {
+    lib: {
+      entry: {
+        index: 'src/index.ts',
+        plugin: 'src/plugin.ts',
+      },
+      formats: ['es'],
+    },
+    rollupOptions: {
+      external: [
+        'vue',
+        'vue-router',
+        'vite',
+        'typescript',
+        'node:fs',
+        'node:path',
+        'node:os',
+      ],
+    },
+  },
   test: {
     environment: 'node',
   },
