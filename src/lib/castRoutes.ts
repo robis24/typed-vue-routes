@@ -1,5 +1,6 @@
 import type { RouteRecordRaw, NavigationGuardWithThis, RouteLocationNormalized, RouteLocationRaw } from 'vue-router'
-import type { RouteDefinition } from './defineRoute'
+import type { RouteDefinition, RouteGroup } from './defineRoute'
+import { isRouteGroup } from './defineRoute'
 import { resolveQueryConfig, type Parser, type QueryParamConfig, type BoundQueryParam } from './parsers'
 
 interface RuntimeRoute {
@@ -12,10 +13,18 @@ interface RuntimeRoute {
 }
 
 type AnyRouteDef = RouteDefinition<string, string, Record<string, Parser<unknown>>, Record<string, QueryParamConfig>>
+type AnyDef = AnyRouteDef | RouteGroup
 
 /** @internal */
 function toRuntime(def: AnyRouteDef): RuntimeRoute {
   return def as unknown as RuntimeRoute
+}
+
+/** @internal */
+function collectLeaves(defs: ReadonlyArray<AnyDef>): AnyRouteDef[] {
+  return defs.flatMap(def =>
+    isRouteGroup(def) ? collectLeaves(def.children as AnyDef[]) : [def as AnyRouteDef],
+  )
 }
 
 /** @internal */
@@ -61,20 +70,34 @@ function redirectWithPatch(to: RouteLocationNormalized, patch: Record<string, st
   } as unknown as RouteLocationRaw
 }
 
-/**
- * Converts an array of {@link RouteDefinition} objects to `RouteRecordRaw[]`
- * for passing directly to `createRouter({ routes })`.
- */
-export function toRouteRecords(defs: AnyRouteDef[]): RouteRecordRaw[] {
-  return defs.map((def) => {
-    const runtime = toRuntime(def)
+/** @internal */
+function toRouteRecord(def: AnyDef): RouteRecordRaw {
+  if (isRouteGroup(def)) {
     return {
-      path: runtime.path,
-      name: runtime.name,
-      component: runtime.component,
-      ...(runtime.props !== undefined ? { props: runtime.props } : {}),
+      path: def.path,
+      ...(def.name !== undefined ? { name: def.name } : {}),
+      component: def.component,
+      children: (def.children as AnyDef[]).map(toRouteRecord),
     } as RouteRecordRaw
-  })
+  }
+  const runtime = toRuntime(def as AnyRouteDef)
+  return {
+    path: runtime.path,
+    name: runtime.name,
+    component: runtime.component,
+    ...(runtime.props !== undefined ? { props: runtime.props } : {}),
+  } as RouteRecordRaw
+}
+
+/**
+ * Converts an array of {@link RouteDefinition} and {@link RouteGroup} objects to
+ * `RouteRecordRaw[]` for passing directly to `createRouter({ routes })`.
+ *
+ * Groups are preserved as nested records so Vue Router can render `<router-view>`
+ * layout components correctly.
+ */
+export function toRouteRecords(defs: AnyDef[]): RouteRecordRaw[] {
+  return defs.map(toRouteRecord)
 }
 
 /**
@@ -83,11 +106,14 @@ export function toRouteRecords(defs: AnyRouteDef[]): RouteRecordRaw[] {
  * - Path params: blocks navigation (`return false`) if the raw URL value cannot be parsed.
  * - Query params: redirects with defaults applied when a param is absent or unparseable.
  *
+ * Accepts both {@link RouteDefinition} and {@link RouteGroup} — groups are flattened
+ * to collect all leaf routes.
+ *
  * Register with `router.beforeEach(createCastGuard(allRoutes))`.
  */
-export function createCastGuard(defs: AnyRouteDef[]): NavigationGuardWithThis<undefined> {
+export function createCastGuard(defs: AnyDef[]): NavigationGuardWithThis<undefined> {
   const registry = new Map<string, RuntimeRoute>()
-  for (const def of defs) {
+  for (const def of collectLeaves(defs)) {
     registry.set(def.name, toRuntime(def))
   }
 

@@ -130,11 +130,62 @@ function extractQueryTypes(obj: ts.ObjectLiteralExpression): Record<string, Extr
   return result
 }
 
+/** @internal Joins a parent and child path, normalising slashes. Empty child = index route. */
+function joinPaths(parent: string, child: string): string {
+  if (!child) return parent
+  const p = parent.endsWith('/') ? parent.slice(0, -1) : parent
+  const c = child.startsWith('/') ? child.slice(1) : child
+  return `${p}/${c}`
+}
+
 function extractRoutes(source: string, filename: string): ExtractedRoute[] {
   const sourceFile = ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, false)
   const routes: ExtractedRoute[] = []
 
-  function visit(node: ts.Node) {
+  // Processes a single defineRoute object literal, emitting to `routes` and
+  // recursing into children with the resolved full path as the new prefix.
+  function processDefineRoute(obj: ts.ObjectLiteralExpression, pathPrefix: string) {
+    let name: string | undefined
+    let path: string | undefined
+    let params: Record<string, ExtractedParam> = {}
+    let query: Record<string, ExtractedQueryParam> = {}
+    let childrenNode: ts.ArrayLiteralExpression | undefined
+
+    for (const prop of obj.properties) {
+      if (!ts.isPropertyAssignment(prop)) continue
+      const key = getPropName(prop.name)
+      if (key === 'name' && ts.isStringLiteral(prop.initializer)) {
+        name = prop.initializer.text
+      } else if (key === 'path' && ts.isStringLiteral(prop.initializer)) {
+        path = prop.initializer.text
+      } else if (key === 'params' && ts.isObjectLiteralExpression(prop.initializer)) {
+        params = extractParamTypes(prop.initializer)
+      } else if (key === 'query' && ts.isObjectLiteralExpression(prop.initializer)) {
+        query = extractQueryTypes(prop.initializer)
+      } else if (key === 'children' && ts.isArrayLiteralExpression(prop.initializer)) {
+        childrenNode = prop.initializer
+      }
+    }
+
+    if (path === undefined) return
+
+    const fullPath = pathPrefix ? joinPaths(pathPrefix, path) : path
+
+    if (childrenNode) {
+      // Group: emit parent only if it has a name, then recurse into children
+      if (name) routes.push({ name, path: fullPath, params: {}, query: {} })
+      for (const element of childrenNode.elements) {
+        visitWithPrefix(element, fullPath)
+      }
+    } else if (name) {
+      // Leaf: emit with fully resolved path
+      routes.push({ name, path: fullPath, params, query })
+    }
+  }
+
+  // Walks the AST. When a defineRoute call is found, hands off to processDefineRoute
+  // and stops auto-recursion — children are handled manually with the correct prefix.
+  function visitWithPrefix(node: ts.Node, pathPrefix: string) {
     if (
       ts.isCallExpression(node) &&
       ts.isIdentifier(node.expression) &&
@@ -142,36 +193,13 @@ function extractRoutes(source: string, filename: string): ExtractedRoute[] {
       node.arguments.length > 0 &&
       ts.isObjectLiteralExpression(node.arguments[0])
     ) {
-      const obj = node.arguments[0] as ts.ObjectLiteralExpression
-      let name: string | undefined
-      let path: string | undefined
-      let params: Record<string, ExtractedParam> = {}
-      let query: Record<string, ExtractedQueryParam> = {}
-
-      for (const prop of obj.properties) {
-        if (!ts.isPropertyAssignment(prop)) continue
-        const key = getPropName(prop.name)
-
-        if (key === 'name' && ts.isStringLiteral(prop.initializer)) {
-          name = prop.initializer.text
-        } else if (key === 'path' && ts.isStringLiteral(prop.initializer)) {
-          path = prop.initializer.text
-        } else if (key === 'params' && ts.isObjectLiteralExpression(prop.initializer)) {
-          params = extractParamTypes(prop.initializer)
-        } else if (key === 'query' && ts.isObjectLiteralExpression(prop.initializer)) {
-          query = extractQueryTypes(prop.initializer)
-        }
-      }
-
-      if (name && path) {
-        routes.push({ name, path, params, query })
-      }
+      processDefineRoute(node.arguments[0] as ts.ObjectLiteralExpression, pathPrefix)
+      return  // children handled manually inside processDefineRoute
     }
-
-    ts.forEachChild(node, visit)
+    ts.forEachChild(node, child => visitWithPrefix(child, pathPrefix))
   }
 
-  visit(sourceFile)
+  visitWithPrefix(sourceFile, '')
   return routes
 }
 

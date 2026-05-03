@@ -48,7 +48,7 @@ export type InferQuery<TQuery extends Record<string, QueryParamConfig>> = {
 }
 
 /**
- * The typed route definition produced by {@link defineRoute}.
+ * The typed route definition produced by {@link defineRoute} for a leaf route.
  *
  * Carries the full generic signature so `toRouteRecords` and `createCastGuard`
  * can extract parser and default information at runtime.
@@ -69,7 +69,31 @@ export interface RouteDefinition<
 }
 
 /**
- * Defines a typed route.
+ * A layout-wrapper route produced by {@link defineRoute} when `children` are provided.
+ *
+ * Children retain their relative paths; `toRouteRecords` builds the nested
+ * `RouteRecordRaw[]` Vue Router needs to render `<router-view>` correctly.
+ */
+export interface RouteGroup {
+  readonly __group: true
+  readonly path: string
+  readonly name?: string
+  readonly component: RouteRecordRaw['component']
+  readonly children: ReadonlyArray<RouteDefinition | RouteGroup>
+}
+
+/**
+ * Type guard that distinguishes a {@link RouteGroup} from a {@link RouteDefinition}.
+ * @internal
+ */
+export function isRouteGroup(def: RouteDefinition | RouteGroup): def is RouteGroup {
+  return '__group' in def
+}
+
+// ---- defineRoute overloads ----
+
+/**
+ * Defines a typed leaf route.
  *
  * - `params` keys must match the `:segments` in `path` — extra keys are a type error.
  * - `query` values are {@link Parser} instances from the `p` namespace or the object form
@@ -80,14 +104,12 @@ export interface RouteDefinition<
  *
  * @example
  * ```ts
- * export const userRoutes = [
- *   defineRoute({
- *     path: '/users/:id',
- *     name: 'user-detail',
- *     params: { id: p.number },
- *     component: () => import('./UserDetailView.vue'),
- *   }),
- * ]
+ * defineRoute({
+ *   path: '/users/:id',
+ *   name: 'user-detail',
+ *   params: { id: p.number },
+ *   component: () => import('./UserDetailView.vue'),
+ * })
  * ```
  */
 export function defineRoute<
@@ -103,14 +125,59 @@ export function defineRoute<
   query?: TQuery
   props?: RouteRecordRaw['props']
   component: RouteRecordRaw['component']
-}): RouteDefinition<TName, TPath, TParams, TQuery> {
-  registerRoute(config.name, config.query as Record<string, QueryParamConfig> | undefined)
+}): RouteDefinition<TName, TPath, TParams, TQuery>
+
+/**
+ * Defines a layout-wrapper route with child routes nested beneath it.
+ *
+ * Children use relative paths; the Vite plugin resolves them to absolute paths
+ * for type generation. `toRouteRecords` produces the nested `RouteRecordRaw[]`
+ * Vue Router needs to render `<router-view>`.
+ *
+ * @example
+ * ```ts
+ * defineRoute({
+ *   path: '/settings',
+ *   component: () => import('./SettingsLayout.vue'),
+ *   children: [
+ *     defineRoute({ path: 'profile', name: 'settings-profile', component: ... }),
+ *     defineRoute({ path: 'account', name: 'settings-account', component: ... }),
+ *   ],
+ * })
+ * ```
+ */
+export function defineRoute(config: {
+  path: string
+  name?: string
+  component: RouteRecordRaw['component']
+  children: ReadonlyArray<RouteDefinition | RouteGroup>
+}): RouteGroup
+
+export function defineRoute(config: {
+  name?: string
+  path: string
+  params?: Record<string, Parser<unknown>>
+  query?: Record<string, QueryParamConfig>
+  props?: RouteRecordRaw['props']
+  component: RouteRecordRaw['component']
+  children?: ReadonlyArray<RouteDefinition | RouteGroup>
+}): RouteDefinition | RouteGroup {
+  if (config.children !== undefined) {
+    return {
+      __group: true,
+      path: config.path,
+      name: config.name,
+      component: config.component,
+      children: config.children,
+    }
+  }
+  registerRoute(config.name!, config.query as Record<string, QueryParamConfig> | undefined)
   return {
     __typed: true,
-    name: config.name,
+    name: config.name!,
     path: config.path,
-    params: config.params as TParams | undefined,
-    query: config.query as TQuery | undefined,
+    params: config.params,
+    query: config.query,
     props: config.props,
     component: config.component,
   }

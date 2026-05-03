@@ -19,6 +19,7 @@ export interface Parser<T> {
 /** @internal */
 export const NumberParser: Parser<number> = {
   get(raw) {
+    if (raw.trim() === '') return 'miss'
     const n = Number(raw)
     return isNaN(n) ? 'miss' : n
   },
