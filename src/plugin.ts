@@ -139,7 +139,8 @@ function getParserType(node: ts.Expression, sourceFile: ts.SourceFile): string |
     let explicitType: string | undefined
 
     for (const prop of node.properties) {
-      const key = getPropName(prop.name)
+      if (!('name' in prop)) continue
+      const key = getPropName(prop.name as ts.PropertyName)
       if (key === 'get') hasGet = true
       if (key === 'set') hasSet = true
       if (key === 'type' && ts.isPropertyAssignment(prop) && ts.isStringLiteral(prop.initializer)) {
