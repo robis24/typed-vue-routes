@@ -1,6 +1,6 @@
 {
   "name": "typed-vue-routes",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "Code-first typed routing for Vue Router — defineRoute factory, runtime param casting, and a Vite plugin that generates typed-router.d.ts",
   "license": "MIT",
