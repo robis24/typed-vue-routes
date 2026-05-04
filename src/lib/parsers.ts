@@ -8,12 +8,15 @@ export type ParseResult<T> = T | 'miss'
  *
  * - `get` parses a raw URL string into `T`, returning `'miss'` on failure.
  * - `set` serializes a `T` back to a URL string.
- *
- * Pass a `Parser` to {@link defineRoute} via the `p` namespace or a custom implementation.
+ * - `type` is an optional string injected verbatim into the generated `typed-router.d.ts`
+ *   as the resolved TypeScript type. Required when `T` is not `string` and you want
+ *   precise types in the generated declarations (e.g. `type: 'Status'` → `param: Status`).
+ *   Without it the generated type falls back to `string`.
  */
 export interface Parser<T> {
   get(raw: string): ParseResult<T>
   set(value: T): string
+  type?: string
 }
 
 /** @internal */

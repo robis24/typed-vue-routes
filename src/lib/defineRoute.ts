@@ -66,6 +66,10 @@ export interface RouteDefinition<
   readonly query: TQuery | undefined
   readonly props?: RouteRecordRaw['props']
   readonly component: RouteRecordRaw['component']
+  readonly meta?: RouteRecordRaw['meta']
+  readonly beforeEnter?: RouteRecordRaw['beforeEnter']
+  readonly redirect?: RouteRecordRaw['redirect']
+  readonly alias?: RouteRecordRaw['alias']
 }
 
 /**
@@ -78,8 +82,19 @@ export interface RouteGroup {
   readonly __group: true
   readonly path: string
   readonly name?: string
-  readonly component: RouteRecordRaw['component']
+  readonly component?: RouteRecordRaw['component']
   readonly children: ReadonlyArray<RouteDefinition | RouteGroup>
+  /**
+   * Param parsers declared at the group level. Merged into each descendant leaf's
+   * params at runtime by `createCastGuard`, with leaf-level params taking precedence
+   * on conflict. Lets a parent declare `:id` once for many children rather than
+   * repeating it on every leaf.
+   */
+  readonly params?: Record<string, Parser<unknown>>
+  readonly meta?: RouteRecordRaw['meta']
+  readonly beforeEnter?: RouteRecordRaw['beforeEnter']
+  readonly redirect?: RouteRecordRaw['redirect']
+  readonly alias?: RouteRecordRaw['alias']
 }
 
 /**
@@ -125,6 +140,10 @@ export function defineRoute<
   query?: TQuery
   props?: RouteRecordRaw['props']
   component: RouteRecordRaw['component']
+  meta?: RouteRecordRaw['meta']
+  beforeEnter?: RouteRecordRaw['beforeEnter']
+  redirect?: RouteRecordRaw['redirect']
+  alias?: RouteRecordRaw['alias']
 }): RouteDefinition<TName, TPath, TParams, TQuery>
 
 /**
@@ -149,8 +168,18 @@ export function defineRoute<
 export function defineRoute(config: {
   path: string
   name?: string
-  component: RouteRecordRaw['component']
+  component?: RouteRecordRaw['component']
   children: ReadonlyArray<RouteDefinition | RouteGroup>
+  /**
+   * Param parsers shared with all descendant leaves. Useful when a parent path has
+   * `:id` (or similar) that several children consume — declare the parser once here
+   * rather than repeating it on every leaf. Leaf-level `params` override on conflict.
+   */
+  params?: Record<string, Parser<unknown>>
+  meta?: RouteRecordRaw['meta']
+  beforeEnter?: RouteRecordRaw['beforeEnter']
+  redirect?: RouteRecordRaw['redirect']
+  alias?: RouteRecordRaw['alias']
 }): RouteGroup
 
 export function defineRoute(config: {
@@ -159,8 +188,12 @@ export function defineRoute(config: {
   params?: Record<string, Parser<unknown>>
   query?: Record<string, QueryParamConfig>
   props?: RouteRecordRaw['props']
-  component: RouteRecordRaw['component']
+  component?: RouteRecordRaw['component']
   children?: ReadonlyArray<RouteDefinition | RouteGroup>
+  meta?: RouteRecordRaw['meta']
+  beforeEnter?: RouteRecordRaw['beforeEnter']
+  redirect?: RouteRecordRaw['redirect']
+  alias?: RouteRecordRaw['alias']
 }): RouteDefinition | RouteGroup {
   if (config.children !== undefined) {
     return {
@@ -169,6 +202,11 @@ export function defineRoute(config: {
       name: config.name,
       component: config.component,
       children: config.children,
+      params: config.params,
+      meta: config.meta,
+      beforeEnter: config.beforeEnter,
+      redirect: config.redirect,
+      alias: config.alias,
     }
   }
   registerRoute(config.name!, config.query as Record<string, QueryParamConfig> | undefined)
@@ -179,6 +217,10 @@ export function defineRoute(config: {
     params: config.params,
     query: config.query,
     props: config.props,
-    component: config.component,
+    component: config.component!,
+    meta: config.meta,
+    beforeEnter: config.beforeEnter,
+    redirect: config.redirect,
+    alias: config.alias,
   }
 }

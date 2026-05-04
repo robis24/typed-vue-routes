@@ -1,14 +1,13 @@
 # typed-vue-routes
 
-Code-first typed routing for Vue Router. Define your routes with a `defineRoute()` factory, get full IDE autocomplete on `router.push` and `useRoute()`, and have URL string params automatically cast to numbers, booleans, and dates at runtime.
+Typed routing and runtime param casting for Vue Router, based on your route config.
 
-Works with Vue Router 4 and 5. Requires TypeScript 5+.
+Declare routes with `defineRoute()` and a parser per param — `p.number`, `p.boolean`, `p.date`, or your own. A Vite plugin reads those declarations and generates `typed-router.d.ts`, making `router.push` and `useRoute()` fully typed. A `beforeEach` guard then validates and casts every URL string to the declared type before the component mounts, so `route.params.id` is an actual `number` at runtime.
 
-## How it works
+Also covered: typed query params with defaults, and custom parsers for any `string ↔ T` mapping — enums, slugs, custom date formats.
 
-You define routes with `defineRoute()`. A Vite plugin reads those definitions at build time and generates a `typed-router.d.ts` that augments Vue Router's `TypesConfig` — the same mechanism used by `unplugin-vue-router`. From that point on, all native Vue Router APIs become type-safe: `router.push`, `useRoute().params`, and `useRoute().query`.
-
-At runtime, a navigation guard casts raw URL strings (everything is a string in the URL) to the types you declared.
+Works with Vue Router 4 and 5. Requires TypeScript 5+ and Vite 5+.
+If you want filesystem-based routing where each `.vue` file under `pages/` becomes a route, use [`unplugin-vue-router`](https://github.com/posva/unplugin-vue-router) — that's the official direction and it's mature.
 
 ## Installation
 
@@ -24,182 +23,242 @@ Peer dependencies: `vue ^3.0.0`, `vue-router ^4.0.0 || ^5.0.0`.
 
 ```ts
 // vite.config.ts
-import { defineConfig } from 'vite'
-import typedRoutes from 'typed-vue-routes/plugin'
+import { defineConfig } from "vite";
+import typedRoutes from "typed-vue-routes/plugin";
 
 export default defineConfig({
   plugins: [typedRoutes()],
-})
+});
 ```
 
-The plugin scans every `routes.ts` file under `src/` and writes `src/typed-router.d.ts`. Commit that file — editors pick it up immediately, CI typechecks against it.
+The plugin scans every `routes.ts` file under `src/` and writes `src/typed-router.d.ts`. Either commit that file, or `.gitignore` it and rely on `vite` regenerating it on dev/build (in which case fresh clones type-error until the first run — pick whichever fits your workflow).
 
 ### 2. Define your routes
 
 ```ts
 // src/routes.ts
-import { defineRoute, p, toRouteRecords, createCastGuard } from 'typed-vue-routes'
-import { createRouter, createWebHistory } from 'vue-router'
+import {
+  defineRoute,
+  p,
+  toRouteRecords,
+  createCastGuard,
+} from "typed-vue-routes";
+import { createRouter, createWebHistory } from "vue-router";
 
 const routes = [
   defineRoute({
-    path: '/',
-    name: 'home',
-    component: () => import('./HomeView.vue'),
+    path: "/",
+    name: "home",
+    component: () => import("./HomeView.vue"),
   }),
   defineRoute({
-    path: '/users/:id',
-    name: 'user-detail',
+    path: "/users/:id",
+    name: "user-detail",
     params: { id: p.number },
-    component: () => import('./UserView.vue'),
+    component: () => import("./UserView.vue"),
   }),
   defineRoute({
-    path: '/search',
-    name: 'search',
+    path: "/search",
+    name: "search",
     query: {
       q: p.string,
       page: { type: p.number, default: 1 },
     },
-    component: () => import('./SearchView.vue'),
+    component: () => import("./SearchView.vue"),
   }),
-]
+];
 
 export const router = createRouter({
   history: createWebHistory(),
   routes: toRouteRecords(routes),
-})
+});
 
-router.beforeEach(createCastGuard(routes))
+router.beforeEach(createCastGuard(routes));
 ```
 
 ### 3. Include the generated declarations
 
-Make sure `src/typed-router.d.ts` is included by your `tsconfig.json`. If your `include` already covers `src/**/*.ts`, nothing to change.
+Make sure `src/typed-router.d.ts` is picked up by `tsconfig.json`. If your `include` already covers `src/**/*.ts`, nothing to change.
 
 ## Defining routes
 
-### `defineRoute(config)`
-
-**Leaf route** — a navigable route with a name.
+### Leaf routes
 
 ```ts
 defineRoute({
-  name: 'user-detail',     // required for named navigation
-  path: '/users/:id',      // path string; `:param` segments are extracted by the type system
-  params: { id: p.number }, // typed path params — keys must match path segments
-  query: { tab: p.string }, // typed query params
-  component: () => import('./UserView.vue'),
-  props: true,             // optional, passed through to Vue Router
-})
+  name: "user-detail", // required for named navigation
+  path: "/users/:id", // path string; `:param` segments are extracted by the type system
+  params: { id: p.number }, // optional; path segments without an entry default to `string`
+  query: { tab: p.string }, // optional
+  component: () => import("./UserView.vue"),
+
+  // Pass-through to RouteRecordRaw — keep them where they always lived:
+  meta: { requiresAuth: true },
+  beforeEnter: (to, from) => {
+    /* ... */
+  },
+  redirect: "/users",
+  alias: "/u/:id",
+  props: true,
+});
 ```
 
-**Layout route** — a wrapping route without its own name, with children.
+`name` is required on every leaf. If you have a true unnamed route (e.g. a catch-all `'/:catchAll(.*)*'`), keep it as a plain `RouteRecordRaw` and concat it in:
+
+```ts
+const routes: RouteRecordRaw[] = [
+  ...toRouteRecords(appRoutes),
+  { path: "/:catchAll(.*)*", component: NotFoundPage },
+];
+```
+
+### Layout routes
+
+A wrapping route with children. The wrapper itself doesn't need a name.
 
 ```ts
 defineRoute({
-  path: '/users',
-  component: () => import('./UserLayout.vue'),
+  path: "/users",
+  component: () => import("./UserLayout.vue"),
   children: [
-    defineRoute({ path: '', name: 'users-list', component: () => import('./UserList.vue') }),
-    defineRoute({ path: ':id', name: 'user-detail', params: { id: p.number }, component: () => import('./UserDetail.vue') }),
+    defineRoute({
+      path: "",
+      name: "users-list",
+      component: () => import("./UserList.vue"),
+    }),
+    defineRoute({
+      path: ":id",
+      name: "user-detail",
+      params: { id: p.number },
+      component: () => import("./UserDetail.vue"),
+    }),
   ],
-})
+});
 ```
 
-Child paths are resolved relative to their parent. The parent's params are inherited by each child.
+Child paths resolve relative to their parent. Parent params are inherited by each child.
+
+### Guard-only wrappers
+
+`component` is optional on layout routes, so you can use a wrapper purely to share a `beforeEnter` guard:
+
+```ts
+defineRoute({
+  path: "/",
+  beforeEnter: requireAuth,
+  // no component — children render directly under the parent's <router-view>
+  children: [
+    defineRoute({ name: "dashboard", path: "dashboard", component: Dashboard }),
+    defineRoute({ name: "settings", path: "settings", component: Settings }),
+  ],
+});
+```
 
 ### Param parsers — `p`
 
-| Parser | URL string | Resolved type |
-|---|---|---|
-| `p.string` | `"hello"` | `string` |
-| `p.number` | `"42"` | `number` |
-| `p.boolean` | `"true"` / `"false"` | `boolean` |
-| `p.date` | `"2024-01-15"` (ISO 8601) | `Date` |
+Built-in parsers:
+
+| Parser      | URL string                | Resolved type |
+| ----------- | ------------------------- | ------------- |
+| `p.string`  | `"hello"`                 | `string`      |
+| `p.number`  | `"42"`                    | `number`      |
+| `p.boolean` | `"true"` / `"false"`      | `boolean`     |
+| `p.date`    | `"2024-01-15"` (ISO 8601) | `Date`        |
+
+Path segments without an entry in `params` default to `string` — you only need to declare params you want to cast.
 
 ### Custom parsers
 
-You can define your own parsers by providing an object with `get` and `set` methods. The plugin will automatically detect them.
-
-To get the correct TypeScript type in the generated `.d.ts`, you can either:
-1. **Use a type annotation:** `const myParser: Parser<MyType> = { ... }`
-2. **Provide a `type` hint:** `{ get, set, type: 'MyType' }`
+Implement the `Parser<T>` interface — `get` parses a URL string into `T` (return `'miss'` on failure), `set` serializes `T` back to a string.
 
 ```ts
-const slugParser = {
-  get: (raw: string) => raw.toLowerCase(),
-  set: (val: string) => val,
-  type: 'Slug' // Injected into the generated types
-}
+import type { Parser } from "typed-vue-routes";
+
+type Status = "active" | "inactive" | "archived";
+
+const statusParser: Parser<Status> = {
+  get: (raw) =>
+    ["active", "inactive", "archived"].includes(raw) ? (raw as Status) : "miss",
+  set: (val) => val,
+};
 
 defineRoute({
-  path: '/post/:slug',
-  name: 'post-detail',
-  params: { slug: slugParser },
-  component: ...
-})
+  path: "/items",
+  name: "item-list",
+  query: { status: statusParser },
+  component: () => import("./ItemList.vue"),
+});
 ```
 
-## Reading typed params in components
+The Vite plugin reads the `Parser<T>` type annotation and emits `status?: Status` in the generated `.d.ts`, so `query.value.status` is `Status | undefined` — not `string`.
+
+For inline parsers or when the type argument can't be inferred from the annotation (e.g. union literals), add a `type` string that the plugin injects verbatim:
+
+```ts
+const statusParser = {
+  get: (raw: string): Status | 'miss' => ...,
+  set: (val: Status) => val,
+  type: "'active' | 'inactive' | 'archived'",  // injected as-is into the .d.ts
+}
+```
+
+The best use case is query params that act as enum filters — you get precise union types in the IDE instead of `string`.
+
+## Reading typed params
 
 ### `useTypedRoute(name?)`
 
 ```ts
-// Narrowed to a single route — IDE knows the exact types
-const { route, query } = useTypedRoute('search')
+// Narrow to one route — params and query are exact:
+const { route, query } = useTypedRoute("search");
+route.params; // typed per the route's declared params
+query.value; // { q: string | undefined; page: number }
 
-route.params  // typed per RouteNamedMap
-query.value   // { q: string | undefined; page: number }
-```
+// Narrow to multiple known routes when a component is shared:
+const { route } = useTypedRoute(["route-a", "route-b"]);
 
-In a component that can be rendered under multiple routes:
-
-```ts
-const { route, query } = useTypedRoute(['route-a', 'route-b'])
-```
-
-Without an argument, returns a union of all registered routes:
-
-```ts
-const { route } = useTypedRoute()
-if (route.name === 'user-detail') {
-  route.params.id // number
+// Or: discriminate by name on the union of all routes:
+const { route } = useTypedRoute();
+if (route.name === "user-detail") {
+  route.params.id; // number
 }
 ```
 
-In development, `useTypedRoute('search')` emits a `console.warn` if the current route name doesn't match `'search'`, catching mismatches between route definitions and components.
+In development, `useTypedRoute('search')` emits `console.warn` if the active route name doesn't match — catches drift between route definitions and components.
+
+You can also use vanilla Vue Router 4.5+ narrowing: `useRoute<'search'>()` — it works because the plugin augments `TypesConfig.RouteNamedMap`. `useTypedRoute()` adds the parsed-query computed ref and the dev-mode mismatch warning on top.
 
 ## Typed navigation
 
 ### `useTypedRouter()`
 
-A drop-in replacement for `useRouter()` that restricts `push` and `replace` to named-route objects. String paths and `{ path }` objects become compile errors.
+Drop-in replacement for `useRouter()` that restricts `push`/`replace` to named-route objects. String paths and `{ path }` objects become compile errors.
 
 ```ts
-import { useTypedRouter } from 'typed-vue-routes'
+import { useTypedRouter } from "typed-vue-routes";
 
-const router = useTypedRouter()
+const router = useTypedRouter();
 
-router.push({ name: 'user-detail', params: { id: 42 } }) // typed
-router.push('/users/42')                                  // type error
-router.push({ path: '/users/42' })                       // type error
+router.push({ name: "user-detail", params: { id: 42 } }); // typed
+router.push("/users/42"); // type error
+router.push({ path: "/users/42" }); // type error
 ```
 
-`TypedRouter` is assignable to `Router`, so it works wherever Vue Router's `Router` type is expected.
+`TypedRouter` is assignable to `Router`, so it slots in wherever Vue Router's `Router` type is expected.
 
 ### `strictNamedRoutes` plugin option
 
-To enforce typed navigation globally — including `this.$router` in Options API and templates — enable `strictNamedRoutes`:
+To enforce typed navigation everywhere — including `this.$router` in Options API and templates — enable `strictNamedRoutes`:
 
 ```ts
-typedRoutes({ strictNamedRoutes: true })
+typedRoutes({ strictNamedRoutes: true });
 ```
 
-This augments `TypesConfig['$router']` with `TypedRouter`, making path-based calls a compile error project-wide without requiring `useTypedRouter()` per component.
+This augments `TypesConfig['$router']` with `TypedRouter`, making path-based navigation a compile error project-wide. Useful as a final tightening step once you've migrated your `router.push` callsites.
 
 ### ESLint rule (optional)
 
-Ban `useRouter` imports to enforce `useTypedRouter` in Composition API code:
+To force `useTypedRouter` instead of `useRouter` in Composition API code:
 
 ```js
 // eslint.config.js
@@ -216,18 +275,40 @@ Ban `useRouter` imports to enforce `useTypedRouter` in Composition API code:
 }
 ```
 
+## Supported route features
+
+Every `RouteRecordRaw` field listed below is accepted by `defineRoute()` and forwarded as-is to the underlying record:
+
+- `name`, `path`, `component`, `children`
+- `params`, `query` (typed equivalents — see above)
+- `props`
+- `meta`
+- `beforeEnter`
+- `redirect`
+- `alias`
+
+Group routes (those with `children`) accept an optional `component` for guard-only wrappers.
+
+## Known limitations
+
+- **Leaf routes require `name`.** Unnamed leaves don't fit the typed-routes model. Catch-all routes work as plain `RouteRecordRaw` concat'd into the final array.
+- **No `?` / `*` / `+` path operators in the type system.** Paths like `/items/:id?` resolve as `string`, not `string | undefined`. Vue Router itself handles them correctly at runtime; only the type narrowing is missing.
+- **No named views (`components`, plural).** Single-component routes only. Open an issue if you need multi-view typing.
+- **Composables shared across routes still need explicit narrowing.** A component that mounts under multiple route names will get `useRoute()` typed as the union of those routes; narrow with `useRoute<'a' | 'b'>()` or `useTypedRoute(['a', 'b'])`. This is the same constraint `unplugin-vue-router` and vanilla typed Vue Router have.
+
 ## API reference
 
 ### Runtime (`typed-vue-routes`)
 
-| Export | Description |
-|---|---|
-| `defineRoute(config)` | Declare a typed route or layout group |
-| `toRouteRecords(defs)` | Convert `defineRoute` output to `RouteRecordRaw[]` for `createRouter` |
-| `createCastGuard(defs)` | Build a `beforeEach` navigation guard that casts URL strings to typed values |
-| `useTypedRoute(name?)` | Composable — typed `route` + parsed `query` computed ref |
-| `useTypedRouter()` | Composable — `useRouter()` narrowed to name-only navigation |
-| `p` | Parser namespace: `p.string`, `p.number`, `p.boolean`, `p.date` |
+| Export                  | Description                                                                                             |
+| ----------------------- | ------------------------------------------------------------------------------------------------------- |
+| `defineRoute(config)`   | Declare a typed leaf or layout route                                                                    |
+| `toRouteRecords(defs)`  | Convert `defineRoute` output to `RouteRecordRaw[]` for `createRouter`                                   |
+| `createCastGuard(defs)` | Build a `beforeEach` navigation guard that casts URL strings to typed values and applies query defaults |
+| `useTypedRoute(name?)`  | Composable — typed `route` + parsed `query` computed ref                                                |
+| `useTypedRouter()`      | Composable — `useRouter()` narrowed to name-only navigation                                             |
+| `p`                     | Parser namespace: `p.string`, `p.number`, `p.boolean`, `p.date`                                         |
+| `Parser<T>`             | Type for declaring custom parsers                                                                       |
 
 ### Plugin (`typed-vue-routes/plugin`)
 
@@ -237,32 +318,47 @@ import typedRoutes from 'typed-vue-routes/plugin'
 typedRoutes(options?)
 ```
 
-| Option | Type | Default | Description |
-|---|---|---|---|
+| Option              | Type      | Default | Description                                                          |
+| ------------------- | --------- | ------- | -------------------------------------------------------------------- |
 | `strictNamedRoutes` | `boolean` | `false` | Augment `$router` with `TypedRouter` to ban path navigation globally |
 
 ## Generated file
 
-`src/typed-router.d.ts` is written automatically by the plugin and should be committed. Do not edit it manually — it is overwritten on every build.
+`src/typed-router.d.ts` is written automatically by the plugin. Do not edit it by hand — it is overwritten on every build.
 
 Example output:
 
 ```ts
 // AUTO-GENERATED by vite-plugin-typed-vue-routes — do not edit manually
-import type { RouteRecordInfo } from 'vue-router'
+import type { RouteRecordInfo } from "vue-router";
 
-declare module 'vue-router' {
+declare module "vue-router" {
   interface TypesConfig {
     RouteNamedMap: {
-      'home': RouteRecordInfo<'home', '/', Record<never, never>, Record<never, never>>
-      'user-detail': RouteRecordInfo<'user-detail', '/users/:id', { id: number }, { id: number }>
-      'search': RouteRecordInfo<'search', '/search', Record<never, never>, Record<never, never>>
-    }
+      home: RouteRecordInfo<
+        "home",
+        "/",
+        Record<never, never>,
+        Record<never, never>
+      >;
+      "user-detail": RouteRecordInfo<
+        "user-detail",
+        "/users/:id",
+        { id: number },
+        { id: number }
+      >;
+      search: RouteRecordInfo<
+        "search",
+        "/search",
+        Record<never, never>,
+        Record<never, never>
+      >;
+    };
     RouteQueryMap: {
-      'home': Record<never, never>
-      'user-detail': Record<never, never>
-      'search': { q?: string; page: number }
-    }
+      home: Record<never, never>;
+      "user-detail": Record<never, never>;
+      search: { q?: string; page: number };
+    };
   }
 }
 ```

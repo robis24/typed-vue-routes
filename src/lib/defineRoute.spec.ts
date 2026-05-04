@@ -86,4 +86,70 @@ describe("defineRoute — group", () => {
 
     expect(group.name).toBeUndefined();
   });
+
+  it("component is optional on groups (guard-only wrapper)", () => {
+    const group = defineRoute({
+      path: "/protected",
+      beforeEnter: () => true,
+      children: [
+        defineRoute({ path: "", name: "protected-home", component: {} }),
+      ],
+    });
+
+    expect(group.component).toBeUndefined();
+    expect(group.beforeEnter).toBeDefined();
+  });
+
+  it("carries params for downstream cast-guard inheritance", () => {
+    const group = defineRoute({
+      path: "/orgs/:orgId",
+      component: {},
+      params: { orgId: p.number },
+      children: [
+        defineRoute({ path: "users", name: "org-users", component: {} }),
+      ],
+    });
+
+    expect(group.params).toEqual({ orgId: p.number });
+  });
+
+  it("carries meta, beforeEnter, redirect, alias on groups", () => {
+    const guard = () => true;
+    const group = defineRoute({
+      path: "/admin",
+      component: {},
+      meta: { requiresAuth: true },
+      beforeEnter: guard,
+      redirect: "/admin/dashboard",
+      alias: "/a",
+      children: [
+        defineRoute({ path: "dashboard", name: "admin-dashboard", component: {} }),
+      ],
+    });
+
+    expect(group.meta).toEqual({ requiresAuth: true });
+    expect(group.beforeEnter).toBe(guard);
+    expect(group.redirect).toBe("/admin/dashboard");
+    expect(group.alias).toBe("/a");
+  });
+});
+
+describe("defineRoute — leaf pass-through fields", () => {
+  it("carries meta, beforeEnter, redirect, alias", () => {
+    const guard = () => true;
+    const route = defineRoute({
+      path: "/users/:id",
+      name: "user-detail",
+      component: {},
+      meta: { roles: ["admin"] },
+      beforeEnter: guard,
+      redirect: "/login",
+      alias: "/u/:id",
+    });
+
+    expect(route.meta).toEqual({ roles: ["admin"] });
+    expect(route.beforeEnter).toBe(guard);
+    expect(route.redirect).toBe("/login");
+    expect(route.alias).toBe("/u/:id");
+  });
 });

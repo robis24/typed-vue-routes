@@ -16,7 +16,10 @@ type AnyRouteDef = RouteDefinition<string, string, Record<string, Parser<unknown
 type AnyDef = AnyRouteDef | RouteGroup
 
 /** @internal */
-function toRuntime(def: AnyRouteDef): RuntimeRoute {
+function toRuntime(
+  def: AnyRouteDef,
+  inheritedParams?: Record<string, Parser<unknown>>,
+): RuntimeRoute {
   const resolvedQuery: Record<string, BoundQueryParam> = {}
   if (def.query) {
     for (const [key, config] of Object.entries(def.query)) {
@@ -24,21 +27,46 @@ function toRuntime(def: AnyRouteDef): RuntimeRoute {
     }
   }
 
+  const hasInherited = inheritedParams && Object.keys(inheritedParams).length > 0
+  const mergedParams =
+    hasInherited && def.params
+      ? { ...inheritedParams, ...def.params }
+      : hasInherited
+        ? { ...inheritedParams }
+        : def.params
+
   return {
     name: def.name,
     path: def.path,
-    params: def.params,
+    params: mergedParams,
     query: resolvedQuery,
     props: def.props,
     component: def.component,
   }
 }
 
-/** @internal */
-function collectLeaves(defs: ReadonlyArray<AnyDef>): AnyRouteDef[] {
-  return defs.flatMap(def =>
-    isRouteGroup(def) ? collectLeaves(def.children as AnyDef[]) : [def as AnyRouteDef],
-  )
+/**
+ * @internal
+ * Walks the route tree and produces a runtime entry for each leaf, merging any
+ * `params` declared on ancestor groups into the leaf's own params. Leaf params win
+ * on conflict (matches how Vue Router resolves nested path/param overrides).
+ */
+function collectLeavesRuntime(
+  defs: ReadonlyArray<AnyDef>,
+  inheritedParams: Record<string, Parser<unknown>> = {},
+): RuntimeRoute[] {
+  const out: RuntimeRoute[] = []
+  for (const def of defs) {
+    if (isRouteGroup(def)) {
+      const next = def.params
+        ? { ...inheritedParams, ...def.params }
+        : inheritedParams
+      out.push(...collectLeavesRuntime(def.children as AnyDef[], next))
+    } else {
+      out.push(toRuntime(def as AnyRouteDef, inheritedParams))
+    }
+  }
+  return out
 }
 
 /** @internal */
@@ -89,16 +117,25 @@ function toRouteRecord(def: AnyDef): RouteRecordRaw {
     return {
       path: def.path,
       ...(def.name !== undefined ? { name: def.name } : {}),
-      component: def.component,
+      ...(def.component !== undefined ? { component: def.component } : {}),
+      ...(def.meta !== undefined ? { meta: def.meta } : {}),
+      ...(def.beforeEnter !== undefined ? { beforeEnter: def.beforeEnter } : {}),
+      ...(def.redirect !== undefined ? { redirect: def.redirect } : {}),
+      ...(def.alias !== undefined ? { alias: def.alias } : {}),
       children: (def.children as AnyDef[]).map(toRouteRecord),
     } as RouteRecordRaw
   }
-  const runtime = toRuntime(def as AnyRouteDef)
+  const leafDef = def as AnyRouteDef
+  const runtime = toRuntime(leafDef)
   return {
     path: runtime.path,
     name: runtime.name,
     component: runtime.component,
     ...(runtime.props !== undefined ? { props: runtime.props } : {}),
+    ...(leafDef.meta !== undefined ? { meta: leafDef.meta } : {}),
+    ...(leafDef.beforeEnter !== undefined ? { beforeEnter: leafDef.beforeEnter } : {}),
+    ...(leafDef.redirect !== undefined ? { redirect: leafDef.redirect } : {}),
+    ...(leafDef.alias !== undefined ? { alias: leafDef.alias } : {}),
   } as RouteRecordRaw
 }
 
@@ -126,8 +163,8 @@ export function toRouteRecords(defs: AnyDef[]): RouteRecordRaw[] {
  */
 export function createCastGuard(defs: AnyDef[]): NavigationGuardWithThis<undefined> {
   const registry = new Map<string, RuntimeRoute>()
-  for (const def of collectLeaves(defs)) {
-    registry.set(def.name, toRuntime(def))
+  for (const runtime of collectLeavesRuntime(defs)) {
+    registry.set(runtime.name, runtime)
   }
 
   return (to: RouteLocationNormalized) => {

@@ -354,6 +354,23 @@ export function extractRoutes(source: string, filename: string): ExtractedRoute[
 }
 
 /**
+ * Extracts `:segment` parameter names from a path string. Mirrors the
+ * `ExtractPathParams<TPath>` TypeScript type, so untyped path segments
+ * still surface as `string` in the generated d.ts. Regex modifiers
+ * (e.g. `:catchAll(.*)*`) are ignored — only valid identifier chars
+ * are picked up.
+ */
+function extractPathSegmentNames(path: string): string[] {
+  const out: string[] = []
+  const re = /:([A-Za-z_$][A-Za-z_$0-9]*)/g
+  let match: RegExpExecArray | null
+  while ((match = re.exec(path)) !== null) {
+    out.push(match[1])
+  }
+  return out
+}
+
+/**
  * Generates the content of `typed-router.d.ts` from the extracted route list.
  *
  * Exported for testing.
@@ -369,15 +386,25 @@ export function generateDts(routes: ExtractedRoute[], options: TypedRoutesOption
   ]
 
   for (const route of routes) {
-    const paramKeys = Object.keys(route.params)
+    const declaredKeys = Object.keys(route.params)
+    const pathSegmentKeys = extractPathSegmentNames(route.path)
+    const allKeys = Array.from(new Set([...pathSegmentKeys, ...declaredKeys]))
     let paramsRaw = 'Record<never, never>'
     let params = 'Record<never, never>'
 
-    if (paramKeys.length > 0) {
-      const rawParts = paramKeys.map((k) => `${k}: ${MEMBER_TO_RAW[route.params[k].member] ?? 'string'}`)
-      const resolvedParts = paramKeys.map(
-        (k) => `${k}: ${MEMBER_TO_RESOLVED[route.params[k].member] ?? route.params[k].member}`
-      )
+    if (allKeys.length > 0) {
+      const rawParts = allKeys.map((k) => {
+        const declared = route.params[k]
+        const rawType = declared ? (MEMBER_TO_RAW[declared.member] ?? 'string') : 'string'
+        return `${k}: ${rawType}`
+      })
+      const resolvedParts = allKeys.map((k) => {
+        const declared = route.params[k]
+        const resolvedType = declared
+          ? (MEMBER_TO_RESOLVED[declared.member] ?? declared.member)
+          : 'string'
+        return `${k}: ${resolvedType}`
+      })
       paramsRaw = `{ ${rawParts.join('; ')} }`
       params = `{ ${resolvedParts.join('; ')} }`
     }
