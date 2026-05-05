@@ -5,13 +5,22 @@ import { join } from 'node:path'
 
 /** @internal */
 export interface ExtractedParam {
-  member: string  // 'number' | 'boolean' | 'date' | 'string'
+  /**
+   * Either a built-in parser member ('number' | 'boolean' | 'date' | 'string') or a
+   * TypeScript identifier referring to a custom type (e.g. an enum). When `importFrom`
+   * is set, this is the identifier to import.
+   */
+  member: string
+  /** When set, emit `import type { <member> } from '<importFrom>'` in the generated d.ts. */
+  importFrom?: string
 }
 
 /** @internal */
 export interface ExtractedQueryParam {
   member: string
   hasDefault: boolean
+  /** See {@link ExtractedParam.importFrom}. */
+  importFrom?: string
 }
 
 /** @internal */
@@ -90,18 +99,37 @@ function getPropName(name: ts.PropertyName): string | undefined {
   return undefined
 }
 
-function getParserType(node: ts.Expression, sourceFile: ts.SourceFile): string | undefined {
-  // 1. Check legacy p.* namespace (on the raw node first)
+function getParserType(
+  node: ts.Expression,
+  sourceFile: ts.SourceFile,
+): ExtractedParam | undefined {
+  // 1. p.enum(<Identifier>, '<string-literal-import-path>')
+  if (
+    ts.isCallExpression(node) &&
+    ts.isPropertyAccessExpression(node.expression) &&
+    ts.isIdentifier(node.expression.expression) &&
+    node.expression.expression.text === 'p' &&
+    node.expression.name.text === 'enum' &&
+    node.arguments.length >= 2
+  ) {
+    const enumArg = node.arguments[0]
+    const pathArg = node.arguments[1]
+    if (ts.isIdentifier(enumArg) && ts.isStringLiteral(pathArg)) {
+      return { member: enumArg.text, importFrom: pathArg.text }
+    }
+  }
+
+  // 2. Legacy p.* namespace (on the raw node first)
   if (
     ts.isPropertyAccessExpression(node) &&
     ts.isIdentifier(node.expression) &&
     node.expression.text === 'p' &&
     VALID_P_MEMBERS.has(node.name.text)
   ) {
-    return node.name.text
+    return { member: node.name.text }
   }
 
-  // 2. Resolve the node (handling identifiers and finding their declarations)
+  // 3. Resolve the node (handling identifiers and finding their declarations)
   if (ts.isIdentifier(node)) {
     for (const statement of sourceFile.statements) {
       if (ts.isVariableStatement(statement)) {
@@ -117,12 +145,12 @@ function getParserType(node: ts.Expression, sourceFile: ts.SourceFile): string |
               if (decl.type.typeArguments && decl.type.typeArguments.length > 0) {
                 const typeArg = decl.type.typeArguments[0]
                 if (ts.isTypeReferenceNode(typeArg) && ts.isIdentifier(typeArg.typeName)) {
-                  return typeArg.typeName.text
+                  return { member: typeArg.typeName.text }
                 }
                 // Handle basic types: number, string, boolean
-                if (typeArg.kind === ts.SyntaxKind.NumberKeyword) return 'number'
-                if (typeArg.kind === ts.SyntaxKind.StringKeyword) return 'string'
-                if (typeArg.kind === ts.SyntaxKind.BooleanKeyword) return 'boolean'
+                if (typeArg.kind === ts.SyntaxKind.NumberKeyword) return { member: 'number' }
+                if (typeArg.kind === ts.SyntaxKind.StringKeyword) return { member: 'string' }
+                if (typeArg.kind === ts.SyntaxKind.BooleanKeyword) return { member: 'boolean' }
               }
             }
             if (decl.initializer) return getParserType(decl.initializer, sourceFile)
@@ -132,7 +160,7 @@ function getParserType(node: ts.Expression, sourceFile: ts.SourceFile): string |
     }
   }
 
-  // 3. Check for object shape { get, set }
+  // 4. Check for object shape { get, set }
   if (ts.isObjectLiteralExpression(node)) {
     let hasGet = false
     let hasSet = false
@@ -149,7 +177,7 @@ function getParserType(node: ts.Expression, sourceFile: ts.SourceFile): string |
     }
 
     if (hasGet && hasSet) {
-      return explicitType ?? 'string'
+      return { member: explicitType ?? 'string' }
     }
   }
 
@@ -180,12 +208,12 @@ function extractParamTypes(
     if (ts.isPropertyAssignment(prop)) {
       const key = getPropName(prop.name)
       if (!key) continue
-      const member = getParserType(prop.initializer, sourceFile)
-      if (member) result[key] = { member }
+      const parser = getParserType(prop.initializer, sourceFile)
+      if (parser) result[key] = parser
     } else if (ts.isShorthandPropertyAssignment(prop)) {
       const key = prop.name.text
-      const member = getParserType(prop.name, sourceFile)
-      if (member) result[key] = { member }
+      const parser = getParserType(prop.name, sourceFile)
+      if (parser) result[key] = parser
     } else if (ts.isSpreadAssignment(prop)) {
       const val = resolveNode(prop.expression, sourceFile)
       if (ts.isObjectLiteralExpression(val)) {
@@ -206,32 +234,32 @@ function extractQueryTypes(
       const key = getPropName(prop.name)
       if (!key) continue
 
-      const member = getParserType(prop.initializer, sourceFile)
-      if (member) {
-        result[key] = { member, hasDefault: false }
+      const parser = getParserType(prop.initializer, sourceFile)
+      if (parser) {
+        result[key] = { ...parser, hasDefault: false }
       } else {
         const val = resolveNode(prop.initializer, sourceFile)
         if (ts.isObjectLiteralExpression(val)) {
-          let m = 'string'
+          let inferred: ExtractedParam = { member: 'string' }
           let hasDefault = false
           for (const inner of val.properties) {
             if (!ts.isPropertyAssignment(inner)) continue
             const innerKey = getPropName(inner.name)
             if (innerKey === 'type') {
               const pm = getParserType(inner.initializer, sourceFile)
-              if (pm) m = pm
+              if (pm) inferred = pm
             } else if (innerKey === 'default') {
               hasDefault = true
             }
           }
-          result[key] = { member: m, hasDefault }
+          result[key] = { ...inferred, hasDefault }
         }
       }
     } else if (ts.isShorthandPropertyAssignment(prop)) {
       const key = prop.name.text
-      const member = getParserType(prop.name, sourceFile)
-      if (member) {
-        result[key] = { member, hasDefault: false }
+      const parser = getParserType(prop.name, sourceFile)
+      if (parser) {
+        result[key] = { ...parser, hasDefault: false }
       }
     } else if (ts.isSpreadAssignment(prop)) {
       const val = resolveNode(prop.expression, sourceFile)
@@ -371,6 +399,52 @@ function extractPathSegmentNames(path: string): string[] {
 }
 
 /**
+ * Computes the raw URL-input TypeScript type for a parameter:
+ * - built-in members (`number`, `boolean`, `date`, `string`) use the {@link MEMBER_TO_RAW} table.
+ * - custom types with an `importFrom` use their member name (the imported identifier) directly.
+ * - everything else falls back to `string`.
+ */
+function rawTypeFor(param: ExtractedParam): string {
+  if (param.importFrom) return param.member
+  return MEMBER_TO_RAW[param.member] ?? 'string'
+}
+
+/**
+ * Computes the resolved (parsed) TypeScript type for a parameter — used for `useRoute().params`
+ * and `useTypedRoute().query`. Custom types use the imported identifier; built-ins use the
+ * {@link MEMBER_TO_RESOLVED} table.
+ */
+function resolvedTypeFor(param: { member: string; importFrom?: string }): string {
+  if (param.importFrom) return param.member
+  return MEMBER_TO_RESOLVED[param.member] ?? param.member
+}
+
+/**
+ * Walks every route's params and query to gather `(member, importFrom)` pairs that need
+ * a corresponding `import type { ... }` line at the top of the generated d.ts.
+ *
+ * Pairs are deduplicated per (importFrom, member). Multiple routes referencing the same
+ * enum produce a single import.
+ */
+function collectImports(routes: ExtractedRoute[]): Map<string, Set<string>> {
+  const importsByPath = new Map<string, Set<string>>()
+  const visit = (param: { member: string; importFrom?: string }) => {
+    if (!param.importFrom) return
+    let names = importsByPath.get(param.importFrom)
+    if (!names) {
+      names = new Set()
+      importsByPath.set(param.importFrom, names)
+    }
+    names.add(param.member)
+  }
+  for (const route of routes) {
+    for (const key of Object.keys(route.params)) visit(route.params[key])
+    for (const key of Object.keys(route.query)) visit(route.query[key])
+  }
+  return importsByPath
+}
+
+/**
  * Generates the content of `typed-router.d.ts` from the extracted route list.
  *
  * Exported for testing.
@@ -379,11 +453,19 @@ export function generateDts(routes: ExtractedRoute[], options: TypedRoutesOption
   const lines: string[] = [
     '// AUTO-GENERATED by vite-plugin-typed-vue-routes — do not edit manually',
     "import type { RouteRecordInfo } from 'vue-router'",
-    '',
-    "declare module 'vue-router' {",
-    '  interface TypesConfig {',
-    '    RouteNamedMap: {',
   ]
+
+  const importsByPath = collectImports(routes)
+  const importPaths = Array.from(importsByPath.keys()).sort()
+  for (const path of importPaths) {
+    const names = Array.from(importsByPath.get(path)!).sort()
+    lines.push(`import type { ${names.join(', ')} } from '${path}'`)
+  }
+
+  lines.push('')
+  lines.push("declare module 'vue-router' {")
+  lines.push('  interface TypesConfig {')
+  lines.push('    RouteNamedMap: {')
 
   for (const route of routes) {
     const declaredKeys = Object.keys(route.params)
@@ -395,14 +477,12 @@ export function generateDts(routes: ExtractedRoute[], options: TypedRoutesOption
     if (allKeys.length > 0) {
       const rawParts = allKeys.map((k) => {
         const declared = route.params[k]
-        const rawType = declared ? (MEMBER_TO_RAW[declared.member] ?? 'string') : 'string'
+        const rawType = declared ? rawTypeFor(declared) : 'string'
         return `${k}: ${rawType}`
       })
       const resolvedParts = allKeys.map((k) => {
         const declared = route.params[k]
-        const resolvedType = declared
-          ? (MEMBER_TO_RESOLVED[declared.member] ?? declared.member)
-          : 'string'
+        const resolvedType = declared ? resolvedTypeFor(declared) : 'string'
         return `${k}: ${resolvedType}`
       })
       paramsRaw = `{ ${rawParts.join('; ')} }`
@@ -425,7 +505,7 @@ export function generateDts(routes: ExtractedRoute[], options: TypedRoutesOption
       const parts = queryKeys.map((k) => {
         const q = route.query[k]
         const optional = q.hasDefault ? '' : '?'
-        return `${k}${optional}: ${MEMBER_TO_RESOLVED[q.member] ?? q.member}`
+        return `${k}${optional}: ${resolvedTypeFor(q)}`
       })
       lines.push(`      '${route.name}': { ${parts.join('; ')} }`)
     }

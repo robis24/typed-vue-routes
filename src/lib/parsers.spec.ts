@@ -4,6 +4,7 @@ import {
   BooleanParser,
   DateParser,
   StringParser,
+  enumParser,
   resolveQueryConfig,
   p,
 } from "./parsers";
@@ -90,6 +91,62 @@ describe("p namespace", () => {
     expect(p.boolean).toBe(BooleanParser);
     expect(p.date).toBe(DateParser);
     expect(p.string).toBe(StringParser);
+  });
+
+  it("exposes p.enum as enumParser", () => {
+    expect(p.enum).toBe(enumParser);
+  });
+});
+
+describe("enumParser", () => {
+  describe("string enum", () => {
+    // String enums have no reverse-mapping, so a const object is identical at runtime.
+    const Status = { Todo: "todo", Done: "done" } as const
+
+    const parser = enumParser(Status, "@/types/Status");
+
+    it("parses valid enum values", () => {
+      expect(parser.get("todo")).toBe(Status.Todo);
+      expect(parser.get("done")).toBe(Status.Done);
+    });
+
+    it("returns miss for unknown values", () => {
+      expect(parser.get("nope")).toBe("miss");
+      expect(parser.get("")).toBe("miss");
+    });
+
+    it("serializes back to the underlying string", () => {
+      expect(parser.set(Status.Todo)).toBe("todo");
+      expect(parser.set(Status.Done)).toBe("done");
+    });
+  });
+
+  describe("numeric enum", () => {
+    // TypeScript numeric enums emit reverse-mapping keys at runtime:
+    // enum Priority { Low = 1, High = 2 } → { '1': 'Low', '2': 'High', Low: 1, High: 2 }
+    const Priority = { 1: "Low", 2: "High", Low: 1, High: 2 } as unknown as Record<string, string | number>
+
+    const parser = enumParser(Priority, "@/types/Priority");
+
+    it("parses numeric strings to enum values", () => {
+      expect(parser.get("1")).toBe(1);
+      expect(parser.get("2")).toBe(2);
+    });
+
+    it("does not accept reverse-mapped enum keys", () => {
+      expect(parser.get("Low")).toBe("miss");
+      expect(parser.get("High")).toBe("miss");
+    });
+
+    it("returns miss for unknown numeric values", () => {
+      expect(parser.get("99")).toBe("miss");
+      expect(parser.get("abc")).toBe("miss");
+    });
+
+    it("serializes the numeric value", () => {
+      expect(parser.set(1)).toBe("1");
+      expect(parser.set(2)).toBe("2");
+    });
   });
 });
 

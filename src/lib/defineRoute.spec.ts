@@ -134,6 +134,26 @@ describe("defineRoute — group", () => {
   });
 });
 
+describe("defineRoute — params with widened TPath", () => {
+  // When the surrounding array is annotated as ReadonlyArray<RouteDefinition | RouteGroup>,
+  // contextual typing widens TPath to `string`. ExtractPathParams<string> is `never`, which
+  // would make the strict path-key check reject every params declaration. The conditional
+  // `string extends TPath ? unknown : ...` in the lib's signature lets these calls compile.
+  it("accepts params when the call site contextually widens TPath to string", () => {
+    type AnyDef = ReturnType<typeof defineRoute<string, string>>;
+    const list: ReadonlyArray<AnyDef> = [
+      defineRoute({
+        path: "/users/:id",
+        name: "user-detail",
+        params: { id: p.number },
+        component: {},
+      }),
+    ];
+
+    expect(list).toHaveLength(1);
+  });
+});
+
 describe("defineRoute — leaf pass-through fields", () => {
   it("carries meta, beforeEnter, redirect, alias", () => {
     const guard = () => true;

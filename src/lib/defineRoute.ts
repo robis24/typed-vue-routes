@@ -135,8 +135,17 @@ export function defineRoute<
 >(config: {
   name: TName
   path: TPath
-  /** Extra keys not present in the path produce a type error via the `never` intersection. */
-  params?: TParams & Record<Exclude<keyof TParams, ExtractPathParams<TPath>>, never>
+  /**
+   * Extra keys not present in the path produce a type error via the `never` intersection.
+   * When `TPath` is widened to `string` (e.g. by a `: ReadonlyArray<RouteDefinition>`
+   * annotation on the surrounding array), the path-key check is skipped — `ExtractPathParams`
+   * cannot meaningfully recurse over the unknown `string` type, and forcing the constraint
+   * would reject every call. Literal-typed paths still get the strict check.
+   */
+  params?: TParams &
+    (string extends TPath
+      ? unknown
+      : Record<Exclude<keyof TParams, ExtractPathParams<TPath>>, never>)
   query?: TQuery
   props?: RouteRecordRaw['props']
   component: RouteRecordRaw['component']

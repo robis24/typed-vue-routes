@@ -5,7 +5,7 @@ export type { RouteDefinition, RouteGroup, InferParams, InferQuery } from './lib
 
 export { toRouteRecords, createCastGuard } from './lib/castRoutes'
 
-export { p, resolveQueryConfig } from './lib/parsers'
+export { p, enumParser, resolveQueryConfig } from './lib/parsers'
 export type { Parser, ParseResult, QueryParamConfig, BoundQueryParam } from './lib/parsers'
 
 export { useTypedRoute } from './lib/useTypedRoute'

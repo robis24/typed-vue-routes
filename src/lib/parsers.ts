@@ -64,6 +64,59 @@ export const StringParser: Parser<string> = {
 }
 
 /**
+ * Builds a {@link Parser} that validates raw URL values against an enum.
+ *
+ * The first argument is the runtime enum object (used for value validation).
+ * The second argument is the import path to the enum's source module — the plugin
+ * reads this string at build time to emit `import type { ... } from '<path>'` in the
+ * generated `typed-router.d.ts`, so the typed param resolves to the enum type rather
+ * than `string`.
+ *
+ * Both string and numeric enums are supported. Numeric enums double-map keys/values;
+ * the parser filters reverse-mappings so only true enum values are accepted.
+ *
+ * @example
+ * ```ts
+ * import { Status } from '@/types/enums/status'
+ *
+ * defineRoute({
+ *   path: '/tasks/:status',
+ *   name: 'tasks-by-status',
+ *   params: { status: p.enum(Status, '@/types/enums/status') },
+ * })
+ * ```
+ */
+export function enumParser<T extends Record<string, string | number>>(
+  enumObj: T,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _importPath: string,
+): Parser<T[keyof T]> {
+  const keys = Object.keys(enumObj)
+  const isNumericEnum = keys.some((k) => /^\d+$/.test(k))
+  const values: ReadonlyArray<T[keyof T]> = isNumericEnum
+    ? (Object.values(enumObj).filter((v) => typeof v === 'number') as T[keyof T][])
+    : (Object.values(enumObj) as T[keyof T][])
+
+  return {
+    get(raw) {
+      const direct = values.find((v) => v === raw)
+      if (direct !== undefined) return direct
+      if (isNumericEnum) {
+        const n = Number(raw)
+        if (Number.isFinite(n)) {
+          const numeric = values.find((v) => v === n)
+          if (numeric !== undefined) return numeric
+        }
+      }
+      return 'miss'
+    },
+    set(value) {
+      return String(value)
+    },
+  }
+}
+
+/**
  * Shape accepted by the `query` option of {@link defineRoute}.
  *
  * - Shorthand: `p.number` — no default, param is optional in the typed query object.
@@ -153,4 +206,6 @@ export const p = {
   /** Expects an ISO 8601 date string in the URL (YYYY-MM-DD); resolves to `Date`. */
   date: DateParser,
   string: StringParser,
+  /** Validates against an enum's values; emits `import type` in generated d.ts via the plugin. */
+  enum: enumParser,
 } as const
