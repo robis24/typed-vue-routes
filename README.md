@@ -204,6 +204,26 @@ const statusParser = {
 
 The best use case is query params that act as enum filters — you get precise union types in the IDE instead of `string`.
 
+### `p.enum`
+
+For TypeScript enums and `const` enum-like objects, use the built-in `p.enum` helper instead of writing a parser by hand:
+
+```ts
+import { defineRoute, p } from 'typed-vue-routes'
+import { Status } from '@/types/status'
+
+defineRoute({
+  path: '/items',
+  name: 'item-list',
+  query: { status: p.enum(Status, '@/types/status') },
+  component: () => import('./ItemList.vue'),
+})
+```
+
+The second argument is the import path — the Vite plugin reads it at build time and emits `import type { Status } from '@/types/status'` in the generated `.d.ts`, so `query.value.status` resolves to the enum type rather than `string`.
+
+Both string enums (`{ Todo: 'todo' }`) and numeric enums are supported. Invalid URL values return `'miss'` and the navigation guard blocks the navigation.
+
 ## Reading typed params
 
 ### `useTypedRoute(name?)`
